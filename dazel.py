@@ -29,6 +29,9 @@ DEFAULT_DOCKER_COMPOSE_COMMAND = "docker-compose"
 DEFAULT_DOCKER_COMPOSE_PROJECT_NAME = "dazel"
 DEFAULT_DOCKER_COMPOSE_SERVICES = ""
 
+DEFAULT_EXEC_FLAGS = ""
+DEFAULT_RUN_FLAGS = ""
+
 DEFAULT_BAZEL_USER_OUTPUT_ROOT = ("%s/.cache/bazel/_bazel_%s" %
                                   (os.environ.get("HOME", "~"),
                                    os.environ.get("USER", "user")))
@@ -39,6 +42,7 @@ DEFAULT_BAZEL_RC_FILE = ""
 DEFAULT_DOCKER_RUN_PRIVILEGED = False
 DEFAULT_DOCKER_MACHINE = None
 DEFAULT_WORKSPACE_HEX = False
+DEFAULT_IMAGE_HEX_MIX = False
 
 
 logger = logging.getLogger("dazel")
@@ -57,7 +61,7 @@ class DockerInstance:
                        run_deps, docker_compose_file, docker_compose_command,
                        docker_compose_project_name, docker_compose_services, bazel_user_output_root,
                        bazel_rc_file, docker_run_privileged, docker_machine, dazel_run_file,
-                       workspace_hex):
+                       workspace_hex, image_hex_mix, exec_flags, run_flags):
         real_directory = os.path.realpath(directory)
         self.workspace_hex_digest = ""
         self.instance_name = instance_name
@@ -78,6 +82,10 @@ class DockerInstance:
         self.docker_run_privileged = docker_run_privileged
         self.docker_machine = docker_machine
         self.dazel_run_file = dazel_run_file
+        self.volumes_to_add = volumes
+        self.image_hex_mix = image_hex_mix
+        self.exec_flags = exec_flags
+        self.run_flags = run_flags
 
         if workspace_hex:
             self.workspace_hex_digest = hashlib.md5(real_directory.encode("ascii")).hexdigest()
@@ -90,7 +98,6 @@ class DockerInstance:
         if self.docker_compose_file:
             self.network = "%s_%s" % (self.docker_compose_project_name, network)
 
-        self._add_volumes(volumes)
         self._add_ports(ports)
         self._add_run_deps(run_deps)
         self._add_compose_services(docker_compose_services)
@@ -129,11 +136,18 @@ class DockerInstance:
                                           DEFAULT_DOCKER_MACHINE),
                 dazel_run_file=config.get("DAZEL_RUN_FILE", DAZEL_RUN_FILE),
                 workspace_hex=config.get("DAZEL_WORKSPACE_HEX",
-                                          DEFAULT_WORKSPACE_HEX))
+                                          DEFAULT_WORKSPACE_HEX),
+                image_hex_mix=config.get("DAZEL_IMAGE_HEX_MIX",
+                                          DEFAULT_IMAGE_HEX_MIX),
+                exec_flags=config.get("DAZEL_EXEC_FLAGS",
+                                       DEFAULT_EXEC_FLAGS),
+                run_flags=config.get("DAZEL_RUN_FLAGS",
+                                      DEFAULT_RUN_FLAGS))
 
     def send_command(self, args):
-        command = "%s exec -i %s %s %s %s %s %s %s" % (
+        command = "%s exec %s -i %s %s %s %s %s %s %s" % (
             self.docker_command,
+            self.exec_flags,
             "-t" if sys.stdout.isatty() else "",
             "--privileged" if self.docker_run_privileged else "",
             self.instance_name,
@@ -148,6 +162,7 @@ class DockerInstance:
                    else ""),
             '"%s"' % '" "'.join(args))
         command = self._with_docker_machine(command)
+        print(command)
         return os.WEXITSTATUS(os.system(command))
 
     def start(self):
@@ -190,6 +205,9 @@ class DockerInstance:
         if rc:
             return rc
 
+        self.process_paths()
+        self._add_volumes(self.volumes_to_add)
+
         # Run the container itself.
         return self._run_container()
 
@@ -220,6 +238,12 @@ class DockerInstance:
 
     def _run_silent_command(self, command):
         return subprocess.call(command, stdout=sys.stderr, shell=True)
+
+    def _image_id(self):
+        command = "%s images %s/%s:latest --no-trunc --format '{{.ID}}'" % (
+            self.docker_command, self.repository, self.image_name)
+        command = self._with_docker_machine(command)
+        return subprocess.check_output(command, shell=True)
 
     def _image_exists(self):
         """Checks if the dazel image exists in the local repository."""
@@ -317,8 +341,9 @@ class DockerInstance:
         logger.info("Starting docker container '%s'..." % self.instance_name)
         command = "%s stop %s >/dev/null 2>&1 ; " % (self.docker_command, self.instance_name)
         command += "%s rm %s >/dev/null 2>&1 ; " % (self.docker_command, self.instance_name)
-        command += "%s run -id --name=%s %s %s %s %s %s %s%s %s" % (
+        command += "%s run %s -id --name=%s %s %s %s %s %s %s%s %s" % (
             self.docker_command,
+            self.run_flags,
             self.instance_name,
             "--privileged" if self.docker_run_privileged else "",
             ("-w %s" % os.path.realpath(self.directory)) if self.directory else "",
@@ -329,6 +354,7 @@ class DockerInstance:
             self.image_name,
             self.run_command if self.run_command else "")
         command = self._with_docker_machine(command)
+        print(command)
         rc = self._run_silent_command(command)
         if rc:
             return rc
@@ -360,6 +386,26 @@ class DockerInstance:
             "%s:%s" % (real_directory, real_directory),
         ]
 
+        # Add the bazel user output directory if it exists, or the real bazelout
+        # directory if it does.
+        if self.bazel_user_output_root:
+            user_output_paths = (DEFAULT_BAZEL_USER_OUTPUT_PATHS +
+                                 [os.path.basename(real_directory)])
+            for user_output_path in user_output_paths:
+              real_user_output_path = os.path.realpath(
+                  os.path.join(self.bazel_output_base,
+                               user_output_path))
+              if not os.path.isdir(real_user_output_path):
+                  os.makedirs(real_user_output_path)
+              volumes += ["%s:%s" % (real_user_output_path,
+                                     real_user_output_path)]
+        elif real_bazelout:
+            volumes += ["%s:%s" % (self.bazel_output_base, self.bazel_output_base)]
+
+        # Calculate the volumes string.
+        self.volumes = '-v "%s"' % '" -v "'.join(volumes)
+
+    def process_paths(self):
         # If the user hasn't explicitly set a DAZEL_BAZEL_USER_OUTPUT_ROOT for
         # bazel, set it from the output directory so that we get the build
         # results on the host.
@@ -374,30 +420,21 @@ class DockerInstance:
         # Add the bazel user output directory if it exists, or the real bazelout
         # directory if it does.
         if self.bazel_user_output_root:
-            self.bazel_output_base = os.path.realpath(
-                os.path.join(self.bazel_user_output_root,
-                             self.workspace_hex_digest))
+            if self.image_hex_mix:
+                cache_hex_digest = hashlib.md5(self.workspace_hex_digest + self._image_id()).hexdigest()
+            else:
+                cache_hex_digest = self.workspace_hex_digest
+            print('workspace: %r' % self.workspace_hex_digest)
+            print('cache: %r' % cache_hex_digest)
 
-            user_output_paths = (DEFAULT_BAZEL_USER_OUTPUT_PATHS +
-                                 [os.path.basename(real_directory)])
-            for user_output_path in user_output_paths:
-              real_user_output_path = os.path.realpath(
-                  os.path.join(self.bazel_output_base,
-                               user_output_path))
-              if not os.path.isdir(real_user_output_path):
-                  os.makedirs(real_user_output_path)
-              volumes += ["%s:%s" % (real_user_output_path,
-                                     real_user_output_path)]
+            cache_path = os.path.join(self.bazel_user_output_root, cache_hex_digest)
+            self.bazel_output_base = cache_path
         elif real_bazelout:
-            volumes += ["%s:%s" % (real_bazelout, real_bazelout)]
             self.bazel_output_base = real_bazelout
 
         # Make sure the path exists on the host.
         if self.bazel_user_output_root and not os.path.isdir(self.bazel_user_output_root):
             os.makedirs(self.bazel_user_output_root)
-
-        # Calculate the volumes string.
-        self.volumes = '-v "%s"' % '" -v "'.join(volumes)
 
     def _add_ports(self, ports):
         """Add the given ports to the run string."""
@@ -523,6 +560,8 @@ def main():
         rc = di.start()
         if rc:
             return rc
+    else:
+        di.process_paths()
 
     # Forward the command line arguments to the container.
     return di.send_command(sys.argv[1:])
