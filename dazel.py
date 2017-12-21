@@ -32,6 +32,7 @@ DEFAULT_DOCKER_COMPOSE_SERVICES = ""
 DEFAULT_EXEC_FLAGS = ""
 DEFAULT_RUN_FLAGS = ""
 DEFAULT_FILES_WATCH = []
+DEFAULT_INTERACTIVE_RUN = False
 
 DEFAULT_BAZEL_USER_OUTPUT_ROOT = ("%s/.cache/bazel/_bazel_%s" %
                                   (os.environ.get("HOME", "~"),
@@ -62,7 +63,8 @@ class DockerInstance:
                        run_deps, docker_compose_file, docker_compose_command,
                        docker_compose_project_name, docker_compose_services, bazel_user_output_root,
                        bazel_rc_file, docker_run_privileged, docker_machine, dazel_run_file,
-                       workspace_hex, image_hex_mix, exec_flags, run_flags, files_watch):
+                       workspace_hex, image_hex_mix, exec_flags, run_flags, files_watch,
+                       interative_run):
         real_directory = os.path.realpath(directory)
         self.workspace_hex_digest = ""
         self.instance_name = instance_name
@@ -88,6 +90,7 @@ class DockerInstance:
         self.exec_flags = exec_flags
         self.run_flags = run_flags
         self.files_watch = files_watch + [self.dockerfile]
+        self.interative_run = interative_run
 
         if workspace_hex:
             self.workspace_hex_digest = hashlib.md5(real_directory.encode("ascii")).hexdigest()
@@ -146,15 +149,24 @@ class DockerInstance:
                 run_flags=config.get("DAZEL_RUN_FLAGS",
                                       DEFAULT_RUN_FLAGS),
                 files_watch=config.get("DAZEL_FILES_WATCH",
-                                        DEFAULT_FILES_WATCH))
+                                        DEFAULT_FILES_WATCH),
+                interative_run=config.get("DAZEL_INTERACTIVE_RUN",
+                                           DEFAULT_INTERACTIVE_RUN))
 
     def send_command(self, args):
-        command = "%s exec %s -i %s %s %s %s %s %s %s" % (
+        docker_command = "%s exec %s -i %s %s %s" % (
             self.docker_command,
             self.exec_flags,
             "-t" if sys.stdout.isatty() else "",
             "--privileged" if self.docker_run_privileged else "",
             self.instance_name,
+        )
+
+        is_interactive = len(args) > 0 and (args[0] == 'run') and self.interative_run
+        if is_interactive:
+            args = [args[0], "--script_path=/tmp/run_bazel"] + args[1:]
+
+        bazel_command = "%s %s %s %s" % (
             self.command,
             ("--bazelrc=%s" % self.bazel_rc_file
              if self.bazel_rc_file and self.command else ""),
@@ -165,6 +177,11 @@ class DockerInstance:
                    if self.command and self.bazel_user_output_root
                    else ""),
             '"%s"' % '" "'.join(args))
+
+        if is_interactive:
+            bazel_command = bazel_command + ' && /tmp/run_bazel'
+        command = '%s /bin/bash -c \'%s\'' % (docker_command, bazel_command)
+
         command = self._with_docker_machine(command)
         print(command)
         return os.WEXITSTATUS(os.system(command))
