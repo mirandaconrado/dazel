@@ -31,6 +31,7 @@ DEFAULT_DOCKER_COMPOSE_SERVICES = ""
 
 DEFAULT_EXEC_FLAGS = ""
 DEFAULT_RUN_FLAGS = ""
+DEFAULT_FILES_WATCH = []
 
 DEFAULT_BAZEL_USER_OUTPUT_ROOT = ("%s/.cache/bazel/_bazel_%s" %
                                   (os.environ.get("HOME", "~"),
@@ -61,7 +62,7 @@ class DockerInstance:
                        run_deps, docker_compose_file, docker_compose_command,
                        docker_compose_project_name, docker_compose_services, bazel_user_output_root,
                        bazel_rc_file, docker_run_privileged, docker_machine, dazel_run_file,
-                       workspace_hex, image_hex_mix, exec_flags, run_flags):
+                       workspace_hex, image_hex_mix, exec_flags, run_flags, files_watch):
         real_directory = os.path.realpath(directory)
         self.workspace_hex_digest = ""
         self.instance_name = instance_name
@@ -86,6 +87,7 @@ class DockerInstance:
         self.image_hex_mix = image_hex_mix
         self.exec_flags = exec_flags
         self.run_flags = run_flags
+        self.files_watch = files_watch + [self.dockerfile]
 
         if workspace_hex:
             self.workspace_hex_digest = hashlib.md5(real_directory.encode("ascii")).hexdigest()
@@ -142,7 +144,9 @@ class DockerInstance:
                 exec_flags=config.get("DAZEL_EXEC_FLAGS",
                                        DEFAULT_EXEC_FLAGS),
                 run_flags=config.get("DAZEL_RUN_FLAGS",
-                                      DEFAULT_RUN_FLAGS))
+                                      DEFAULT_RUN_FLAGS),
+                files_watch=config.get("DAZEL_FILES_WATCH",
+                                        DEFAULT_FILES_WATCH))
 
     def send_command(self, args):
         command = "%s exec %s -i %s %s %s %s %s %s %s" % (
@@ -237,6 +241,7 @@ class DockerInstance:
         return (rc == 0)
 
     def _run_silent_command(self, command):
+        print(command)
         return subprocess.call(command, stdout=sys.stderr, shell=True)
 
     def _image_id(self):
@@ -547,6 +552,12 @@ class DockerInstance:
             directory = os.path.dirname(directory)
         return directory
 
+    def watched_files_have_changed(self):
+        for f in self.files_watch:
+            if os.path.exists(f) and os.path.getctime(f) > os.path.getctime(self.dazel_run_file):
+                return True
+        return False
+
 
 def main():
     # Read the configuration either from .dazelrc or from the environment.
@@ -555,8 +566,7 @@ def main():
     # If there is no .dazel_run file, or it is too old, start the DockerInstance.
     if (not os.path.exists(di.dazel_run_file) or
         not di.is_running() or
-        (os.path.exists(di.dockerfile) and
-         os.path.getctime(di.dockerfile) > os.path.getctime(di.dazel_run_file))):
+        di.watched_files_have_changed()):
         rc = di.start()
         if rc:
             return rc
