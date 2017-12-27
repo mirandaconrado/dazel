@@ -37,6 +37,7 @@ DEFAULT_INTERACTIVE_RUN = False
 DEFAULT_TIMEOUT_WATCH_TIME = None
 DEFAULT_TIMEOUT_WATCH_PATH = '/tmp/dazel_watch'
 DEFAULT_IMAGE_TAG = 'latest'
+DEFAULT_CLEANUP_TIMESCALE = 'week'
 
 DEFAULT_BAZEL_USER_OUTPUT_ROOT = ("%s/.cache/bazel/_bazel_%s" %
                                   (os.environ.get("HOME", "~"),
@@ -68,7 +69,8 @@ class DockerInstance:
                        docker_compose_project_name, docker_compose_services, bazel_user_output_root,
                        bazel_rc_file, docker_run_privileged, docker_machine, dazel_run_file,
                        workspace_hex, image_hex_mix, exec_flags, run_flags, files_watch,
-                       interative_run, timeout_watch_time, timeout_watch_path, image_tag):
+                       interative_run, timeout_watch_time, timeout_watch_path, image_tag,
+                       cleanup_timescale):
         real_directory = os.path.realpath(directory)
         self.workspace_hex_digest = ""
         self.instance_name = instance_name
@@ -96,6 +98,7 @@ class DockerInstance:
         self.files_watch = files_watch + [self.dockerfile]
         self.interative_run = interative_run
         self.image_tag = image_tag
+        self.cleanup_timescale = cleanup_timescale.lower()
 
         # explicitly overwrite the run command
         # TODO(conrado): add a warning?
@@ -176,7 +179,9 @@ class DockerInstance:
                 timeout_watch_path=config.get("DAZEL_TIMEOUT_WATCH_PATH",
                                                DEFAULT_TIMEOUT_WATCH_PATH),
                 image_tag=config.get("DAZEL_IMAGE_TAG",
-                                      DEFAULT_IMAGE_TAG))
+                                      DEFAULT_IMAGE_TAG),
+                cleanup_timescale=config.get("DAZEL_CLEANUP_TIMESCALE",
+                                              DEFAULT_CLEANUP_TIMESCALE))
 
     def send_command(self, args):
         docker_command = "%s exec %s -i %s %s %s" % (
@@ -605,6 +610,31 @@ class DockerInstance:
             if os.path.exists(f) and os.path.getctime(f) > os.path.getctime(self.dazel_run_file):
                 return True
         return False
+
+    def cleanup(self):
+        base = '%s%s' % \
+            (("%s/" % self.repository) if self.repository else "",
+            self.image_name)
+
+        command = '%s ps --format "{{.Image}}"' % self.docker_command
+        command = self._with_docker_machine(command)
+        active_images = subprocess.check_output(command, shell=True).strip().split('\n')
+
+        command = '%s images --format "{{.Repository}}:{{.Tag}}:{{.CreatedSince}}"' % self.docker_command
+        command = self._with_docker_machine(command)
+        all_images = subprocess.check_output(command, shell=True).strip().split('\n')
+
+        active_images = set([i for i in active_images if i[:len(base)] == base])
+        all_images = [(':'.join(i.split(':')[:-1]), i.split(':')[-1]) for i in all_images if i[:len(base)] == base]
+
+        inactive_images = [i for i in all_images if i[0] not in active_images]
+        for image in inactive_images:
+            if self.cleanup_timescale in image[1]:
+                print("Deleting image %s because it's not active and it was created over a %s ago"
+                        % (image[0], self.cleanup_timescale))
+                command = '%s rmi "%s"' % (self.docker_command, image[0])
+                command = self._with_docker_machine(command)
+                os.system(command)
 
 
 def main():
