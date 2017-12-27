@@ -36,6 +36,7 @@ DEFAULT_INTERACTIVE_RUN = False
 
 DEFAULT_TIMEOUT_WATCH_TIME = None
 DEFAULT_TIMEOUT_WATCH_PATH = '/tmp/dazel_watch'
+DEFAULT_IMAGE_TAG = 'latest'
 
 DEFAULT_BAZEL_USER_OUTPUT_ROOT = ("%s/.cache/bazel/_bazel_%s" %
                                   (os.environ.get("HOME", "~"),
@@ -67,7 +68,7 @@ class DockerInstance:
                        docker_compose_project_name, docker_compose_services, bazel_user_output_root,
                        bazel_rc_file, docker_run_privileged, docker_machine, dazel_run_file,
                        workspace_hex, image_hex_mix, exec_flags, run_flags, files_watch,
-                       interative_run, timeout_watch_time, timeout_watch_path):
+                       interative_run, timeout_watch_time, timeout_watch_path, image_tag):
         real_directory = os.path.realpath(directory)
         self.workspace_hex_digest = ""
         self.instance_name = instance_name
@@ -94,6 +95,7 @@ class DockerInstance:
         self.run_flags = run_flags
         self.files_watch = files_watch + [self.dockerfile]
         self.interative_run = interative_run
+        self.image_tag = image_tag
 
         # explicitly overwrite the run command
         # TODO(conrado): add a warning?
@@ -172,7 +174,9 @@ class DockerInstance:
                 timeout_watch_time=config.get("DAZEL_TIMEOUT_WATCH_TIME",
                                                DEFAULT_TIMEOUT_WATCH_TIME),
                 timeout_watch_path=config.get("DAZEL_TIMEOUT_WATCH_PATH",
-                                               DEFAULT_TIMEOUT_WATCH_PATH))
+                                               DEFAULT_TIMEOUT_WATCH_PATH),
+                image_tag=config.get("DAZEL_IMAGE_TAG",
+                                      DEFAULT_IMAGE_TAG))
 
     def send_command(self, args):
         docker_command = "%s exec %s -i %s %s %s" % (
@@ -305,8 +309,9 @@ class DockerInstance:
         if not os.path.exists(self.dockerfile):
             raise RuntimeError("No Dockerfile to build the dazel image from.")
 
-        command = "%s build -t %s/%s -f %s %s" % (
-            self.docker_command, self.repository, self.image_name, self.dockerfile, self.directory)
+        command = "%s build -t %s/%s:%s -f %s %s" % (
+            self.docker_command, self.repository, self.image_name, self.image_tag, self.dockerfile,
+            self.directory)
         command = self._with_docker_machine(command)
         return self._run_silent_command(command)
 
@@ -388,7 +393,7 @@ class DockerInstance:
         logger.info("Starting docker container '%s'..." % self.instance_name)
         command = "%s stop %s >/dev/null 2>&1 ; " % (self.docker_command, self.instance_name)
         command += "%s rm %s >/dev/null 2>&1 ; " % (self.docker_command, self.instance_name)
-        command += "%s run %s -id --name=%s %s %s %s %s %s %s%s %s" % (
+        command += "%s run %s -id --name=%s %s %s %s %s %s %s%s:%s %s" % (
             self.docker_command,
             self.run_flags,
             self.instance_name,
@@ -399,6 +404,7 @@ class DockerInstance:
             ("--net=%s" % self.network) if self.network else "",
             ("%s/" % self.repository) if self.repository else "",
             self.image_name,
+            self.image_tag,
             self.run_command if self.run_command else "")
         command = self._with_docker_machine(command)
         print(command)
