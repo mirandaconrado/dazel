@@ -34,6 +34,9 @@ DEFAULT_RUN_FLAGS = ""
 DEFAULT_FILES_WATCH = []
 DEFAULT_INTERACTIVE_RUN = False
 
+DEFAULT_TIMEOUT_WATCH_TIME = None
+DEFAULT_TIMEOUT_WATCH_PATH = '/tmp/dazel_watch'
+
 DEFAULT_BAZEL_USER_OUTPUT_ROOT = ("%s/.cache/bazel/_bazel_%s" %
                                   (os.environ.get("HOME", "~"),
                                    os.environ.get("USER", "user")))
@@ -64,7 +67,7 @@ class DockerInstance:
                        docker_compose_project_name, docker_compose_services, bazel_user_output_root,
                        bazel_rc_file, docker_run_privileged, docker_machine, dazel_run_file,
                        workspace_hex, image_hex_mix, exec_flags, run_flags, files_watch,
-                       interative_run):
+                       interative_run, timeout_watch_time, timeout_watch_path):
         real_directory = os.path.realpath(directory)
         self.workspace_hex_digest = ""
         self.instance_name = instance_name
@@ -91,6 +94,20 @@ class DockerInstance:
         self.run_flags = run_flags
         self.files_watch = files_watch + [self.dockerfile]
         self.interative_run = interative_run
+
+        # explicitly overwrite the run command
+        # TODO(conrado): add a warning?
+        if timeout_watch_time is not None:
+            if not isinstance(timeout_watch_time, int):
+                raise ValueError("DAZEL_TIMEOUT_WATCH_TIME should be an integer")
+            if not isinstance(timeout_watch_path, str):
+                raise ValueError("DAZEL_TIMEOUT_WATCH_PATH should be a string")
+            timeout_watch_path = '"%s"' % timeout_watch_path
+            print("Overwriting startup command '%s' with inactivity monitor" % self.run_command)
+            self.run_command = "/bin/bash -c 'rm -f {path}; touch {path}; while true; do TOUCH_TIME=$(stat -c %X {path}); CURRENT_TIME=$(date +%s); TIME_DIFF=$(expr $CURRENT_TIME - $TOUCH_TIME); if [ $TIME_DIFF -ge {delay} ]; then break; fi; sleep 1; done'".format(path=timeout_watch_path, delay=timeout_watch_time)
+
+        self.timeout_watch_time = timeout_watch_time
+        self.timeout_watch_path = timeout_watch_path
 
         if workspace_hex:
             self.workspace_hex_digest = hashlib.md5(real_directory.encode("ascii")).hexdigest()
@@ -151,7 +168,11 @@ class DockerInstance:
                 files_watch=config.get("DAZEL_FILES_WATCH",
                                         DEFAULT_FILES_WATCH),
                 interative_run=config.get("DAZEL_INTERACTIVE_RUN",
-                                           DEFAULT_INTERACTIVE_RUN))
+                                           DEFAULT_INTERACTIVE_RUN),
+                timeout_watch_time=config.get("DAZEL_TIMEOUT_WATCH_TIME",
+                                               DEFAULT_TIMEOUT_WATCH_TIME),
+                timeout_watch_path=config.get("DAZEL_TIMEOUT_WATCH_PATH",
+                                               DEFAULT_TIMEOUT_WATCH_PATH))
 
     def send_command(self, args):
         docker_command = "%s exec %s -i %s %s %s" % (
@@ -180,6 +201,10 @@ class DockerInstance:
 
         if is_interactive:
             bazel_command = bazel_command + ' && /tmp/run_bazel'
+
+        if self.timeout_watch_time is not None:
+            bazel_command = ('touch %s && ' % self.timeout_watch_path) + bazel_command
+
         command = '%s /bin/bash -c \'%s\'' % (docker_command, bazel_command)
 
         command = self._with_docker_machine(command)
