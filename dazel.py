@@ -33,6 +33,7 @@ DEFAULT_EXEC_FLAGS = ""
 DEFAULT_RUN_FLAGS = ""
 DEFAULT_FILES_WATCH = []
 DEFAULT_INTERACTIVE_RUN = False
+DEFAULT_BUILD_ARGS = []
 
 DEFAULT_TIMEOUT_WATCH_TIME = None
 DEFAULT_TIMEOUT_WATCH_PATH = '/tmp/dazel_watch'
@@ -42,9 +43,10 @@ DEFAULT_CLEANUP_TIMESCALE = 'week'
 DEFAULT_BAZEL_USER_OUTPUT_ROOT = ("%s/.cache/bazel/_bazel_%s" %
                                   (os.environ.get("HOME", "~"),
                                    os.environ.get("USER", "user")))
-TEMP_BAZEL_OUTPUT_USER_ROOT = ("/var/bazel/workspace/_bazel_%s" %
-                               os.environ.get("USER", "user"))
-DEFAULT_BAZEL_USER_OUTPUT_PATHS = ["external", "action_cache", "execroot"]
+TEMP_BAZEL_OUTPUT_USER_ROOT = ("%s/bazel/workspace/_bazel_%s" %
+                               (os.environ.get("HOME", "~"),
+                                os.environ.get("USER", "user")))
+DEFAULT_BAZEL_USER_OUTPUT_PATHS = ["."]
 DEFAULT_BAZEL_RC_FILE = ""
 DEFAULT_DOCKER_RUN_PRIVILEGED = False
 DEFAULT_DOCKER_MACHINE = None
@@ -70,7 +72,7 @@ class DockerInstance:
                        bazel_rc_file, docker_run_privileged, docker_machine, dazel_run_file,
                        workspace_hex, image_hex_mix, exec_flags, run_flags, files_watch,
                        interative_run, timeout_watch_time, timeout_watch_path, image_tag,
-                       cleanup_timescale):
+                       cleanup_timescale, build_arguments):
         real_directory = os.path.realpath(directory)
         self.workspace_hex_digest = ""
         self.instance_name = instance_name
@@ -99,6 +101,7 @@ class DockerInstance:
         self.interative_run = interative_run
         self.image_tag = image_tag
         self.cleanup_timescale = cleanup_timescale.lower()
+        self.build_arguments = build_arguments
 
         # explicitly overwrite the run command
         # TODO(conrado): add a warning?
@@ -108,7 +111,6 @@ class DockerInstance:
             if not isinstance(timeout_watch_path, str):
                 raise ValueError("DAZEL_TIMEOUT_WATCH_PATH should be a string")
             timeout_watch_path = '"%s"' % timeout_watch_path
-            print("Overwriting startup command '%s' with inactivity monitor" % self.run_command)
             self.run_command = "/bin/bash -c 'rm -f {path}; touch {path}; while true; do TOUCH_TIME=$(stat -c %X {path}); CURRENT_TIME=$(date +%s); TIME_DIFF=$(expr $CURRENT_TIME - $TOUCH_TIME); if [ $TIME_DIFF -ge {delay} ]; then break; fi; sleep 1; done'".format(path=timeout_watch_path, delay=timeout_watch_time)
 
         self.timeout_watch_time = timeout_watch_time
@@ -181,7 +183,9 @@ class DockerInstance:
                 image_tag=config.get("DAZEL_IMAGE_TAG",
                                       DEFAULT_IMAGE_TAG),
                 cleanup_timescale=config.get("DAZEL_CLEANUP_TIMESCALE",
-                                              DEFAULT_CLEANUP_TIMESCALE))
+                                              DEFAULT_CLEANUP_TIMESCALE),
+                build_arguments=config.get("DAZEL_BUILD_ARGS",
+                                            DEFAULT_BUILD_ARGS))
 
     def send_command(self, args):
         docker_command = "%s exec %s -i %s %s %s" % (
@@ -209,7 +213,10 @@ class DockerInstance:
             '"%s"' % '" "'.join(args))
 
         if is_interactive:
-            bazel_command = bazel_command + ' && /tmp/run_bazel'
+            if os.getenv('ESCAPE_SANDBOX', 0):
+                bazel_command = bazel_command + ' && (sed "2d" /tmp/run_bazel > /tmp/run_bazel_clean) && chmod a+x /tmp/run_bazel_clean && /tmp/run_bazel_clean'
+            else:
+                bazel_command = bazel_command + ' && /tmp/run_bazel'
 
         if self.timeout_watch_time is not None:
             bazel_command = ('touch %s && ' % self.timeout_watch_path) + bazel_command
@@ -217,7 +224,6 @@ class DockerInstance:
         command = '%s /bin/bash -c \'%s\'' % (docker_command, bazel_command)
 
         command = self._with_docker_machine(command)
-        print(command)
         return os.WEXITSTATUS(os.system(command))
 
     def start(self):
@@ -292,7 +298,6 @@ class DockerInstance:
         return (rc == 0)
 
     def _run_silent_command(self, command):
-        print(command)
         return subprocess.call(command, stdout=sys.stderr, shell=True)
 
     def _image_id(self):
@@ -314,9 +319,11 @@ class DockerInstance:
         if not os.path.exists(self.dockerfile):
             raise RuntimeError("No Dockerfile to build the dazel image from.")
 
-        command = "%s build -t %s/%s:%s -f %s %s" % (
-            self.docker_command, self.repository, self.image_name, self.image_tag, self.dockerfile,
-            self.directory)
+        build_arguments = " ".join(self.build_arguments)
+
+        command = "%s build %s -t %s/%s:%s -f %s %s" % (
+            self.docker_command, build_arguments, self.repository, self.image_name, self.image_tag,
+            self.dockerfile, self.directory)
         command = self._with_docker_machine(command)
         return self._run_silent_command(command)
 
@@ -412,7 +419,6 @@ class DockerInstance:
             self.image_tag,
             self.run_command if self.run_command else "")
         command = self._with_docker_machine(command)
-        print(command)
         rc = self._run_silent_command(command)
         if rc:
             return rc
@@ -461,6 +467,10 @@ class DockerInstance:
             volumes += ["%s:%s" % (self.bazel_output_base, self.bazel_output_base)]
 
         # Calculate the volumes string.
+        for v in volumes:
+            local_v = v.split(':')[0]
+            if not os.path.exists(local_v):
+                os.makedirs(local_v)
         self.volumes = '-v "%s"' % '" -v "'.join(volumes)
 
     def process_paths(self):
@@ -482,8 +492,6 @@ class DockerInstance:
                 cache_hex_digest = hashlib.md5(self.workspace_hex_digest + self._image_id()).hexdigest()
             else:
                 cache_hex_digest = self.workspace_hex_digest
-            print('workspace: %r' % self.workspace_hex_digest)
-            print('cache: %r' % cache_hex_digest)
 
             cache_path = os.path.join(self.bazel_user_output_root, cache_hex_digest)
             self.bazel_output_base = cache_path
