@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
+import collections
 import hashlib
 import logging
 import os
 import subprocess
 import sys
-import types
 
 
 DAZEL_RC_FILE = ".dazelrc"
@@ -133,59 +133,78 @@ class DockerInstance:
 
     @classmethod
     def from_config(cls):
-        config = cls._config_from_file()
+        config = {
+            "DAZEL_INSTANCE_NAME": DEFAULT_INSTANCE_NAME,
+            "DAZEL_IMAGE_NAME": DEFAULT_IMAGE_NAME,
+            "DAZEL_RUN_COMMAND": DEFAULT_RUN_COMMAND,
+            "DAZEL_DOCKER_COMMAND": DEFAULT_DOCKER_COMMAND,
+            "DAZEL_DOCKERFILE": DEFAULT_LOCAL_DOCKERFILE,
+            "DAZEL_REPOSITORY": DEFAULT_REMOTE_REPOSITORY,
+            "DAZEL_DIRECTORY": cls._find_workspace_directory(),
+            "DAZEL_COMMAND": DEFAULT_COMMAND,
+            "DAZEL_VOLUMES": DEFAULT_VOLUMES,
+            "DAZEL_PORTS": DEFAULT_PORTS,
+            "DAZEL_NETWORK": DEFAULT_NETWORK,
+            "DAZEL_RUN_DEPS": DEFAULT_RUN_DEPS,
+            "DAZEL_DOCKER_COMPOSE_FILE": DEFAULT_DOCKER_COMPOSE_FILE,
+            "DAZEL_DOCKER_COMPOSE_COMMAND": DEFAULT_DOCKER_COMPOSE_COMMAND,
+            "DAZEL_DOCKER_COMPOSE_PROJECT_NAME": DEFAULT_DOCKER_COMPOSE_PROJECT_NAME,
+            "DAZEL_DOCKER_COMPOSE_SERVICES": DEFAULT_DOCKER_COMPOSE_SERVICES,
+            "DAZEL_BAZEL_RC_FILE": DEFAULT_BAZEL_RC_FILE,
+            "DAZEL_BAZEL_USER_OUTPUT_ROOT": DEFAULT_BAZEL_USER_OUTPUT_ROOT,
+            "DAZEL_DOCKER_RUN_PRIVILEGED": DEFAULT_DOCKER_RUN_PRIVILEGED,
+            "DAZEL_DOCKER_MACHINE": DEFAULT_DOCKER_MACHINE,
+            "DAZEL_RUN_FILE": DAZEL_RUN_FILE,
+            "DAZEL_WORKSPACE_HEX": DEFAULT_WORKSPACE_HEX,
+            "DAZEL_IMAGE_HEX_MIX": DEFAULT_IMAGE_HEX_MIX,
+            "DAZEL_EXEC_FLAGS": DEFAULT_EXEC_FLAGS,
+            "DAZEL_RUN_FLAGS": DEFAULT_RUN_FLAGS,
+            "DAZEL_FILES_WATCH": DEFAULT_FILES_WATCH,
+            "DAZEL_INTERACTIVE_RUN": DEFAULT_INTERACTIVE_RUN,
+            "DAZEL_TIMEOUT_WATCH_TIME": DEFAULT_TIMEOUT_WATCH_TIME,
+            "DAZEL_TIMEOUT_WATCH_PATH": DEFAULT_TIMEOUT_WATCH_PATH,
+            "DAZEL_IMAGE_TAG": DEFAULT_IMAGE_TAG,
+            "DAZEL_CLEANUP_TIMESCALE": DEFAULT_CLEANUP_TIMESCALE,
+            "DAZEL_BUILD_ARGS": DEFAULT_BUILD_ARGS,
+        }
+        # Allow overriding defaults first in the user config file, then in the
+        # workspace config file, and finally via environment.
+        config.update(cls._config_from_user_file(config))
+        config.update(cls._config_from_workspace_file(config))
         config.update(cls._config_from_environment())
         return DockerInstance(
-                instance_name=config.get("DAZEL_INSTANCE_NAME", DEFAULT_INSTANCE_NAME),
-                image_name=config.get("DAZEL_IMAGE_NAME", DEFAULT_IMAGE_NAME),
-                run_command=config.get("DAZEL_RUN_COMMAND", DEFAULT_RUN_COMMAND),
-                docker_command=config.get("DAZEL_DOCKER_COMMAND", DEFAULT_DOCKER_COMMAND),
-                dockerfile=config.get("DAZEL_DOCKERFILE", DEFAULT_LOCAL_DOCKERFILE),
-                repository=config.get("DAZEL_REPOSITORY", DEFAULT_REMOTE_REPOSITORY),
-                directory=config.get("DAZEL_DIRECTORY", DEFAULT_DIRECTORY),
-                command=config.get("DAZEL_COMMAND", DEFAULT_COMMAND),
-                volumes=config.get("DAZEL_VOLUMES", DEFAULT_VOLUMES),
-                ports=config.get("DAZEL_PORTS", DEFAULT_PORTS),
-                network=config.get("DAZEL_NETWORK", DEFAULT_NETWORK),
-                run_deps=config.get("DAZEL_RUN_DEPS", DEFAULT_RUN_DEPS),
-                docker_compose_file=config.get("DAZEL_DOCKER_COMPOSE_FILE",
-                                               DEFAULT_DOCKER_COMPOSE_FILE),
-                docker_compose_command=config.get("DAZEL_DOCKER_COMPOSE_COMMAND",
-                                                  DEFAULT_DOCKER_COMPOSE_COMMAND),
-                docker_compose_project_name=config.get("DAZEL_DOCKER_COMPOSE_PROJECT_NAME",
-                                                       DEFAULT_DOCKER_COMPOSE_PROJECT_NAME),
-                docker_compose_services=config.get("DAZEL_DOCKER_COMPOSE_SERVICES",
-                                                   DEFAULT_DOCKER_COMPOSE_SERVICES),
-                bazel_rc_file=config.get("DAZEL_BAZEL_RC_FILE", DEFAULT_BAZEL_RC_FILE),
-                bazel_user_output_root=config.get("DAZEL_BAZEL_USER_OUTPUT_ROOT",
-                                                  DEFAULT_BAZEL_USER_OUTPUT_ROOT),
-                docker_run_privileged=config.get("DAZEL_DOCKER_RUN_PRIVILEGED",
-                                                 DEFAULT_DOCKER_RUN_PRIVILEGED),
-                docker_machine=config.get("DAZEL_DOCKER_MACHINE",
-                                          DEFAULT_DOCKER_MACHINE),
-                dazel_run_file=config.get("DAZEL_RUN_FILE", DAZEL_RUN_FILE),
-                workspace_hex=config.get("DAZEL_WORKSPACE_HEX",
-                                          DEFAULT_WORKSPACE_HEX),
-                image_hex_mix=config.get("DAZEL_IMAGE_HEX_MIX",
-                                          DEFAULT_IMAGE_HEX_MIX),
-                exec_flags=config.get("DAZEL_EXEC_FLAGS",
-                                       DEFAULT_EXEC_FLAGS),
-                run_flags=config.get("DAZEL_RUN_FLAGS",
-                                      DEFAULT_RUN_FLAGS),
-                files_watch=config.get("DAZEL_FILES_WATCH",
-                                        DEFAULT_FILES_WATCH),
-                interative_run=config.get("DAZEL_INTERACTIVE_RUN",
-                                           DEFAULT_INTERACTIVE_RUN),
-                timeout_watch_time=config.get("DAZEL_TIMEOUT_WATCH_TIME",
-                                               DEFAULT_TIMEOUT_WATCH_TIME),
-                timeout_watch_path=config.get("DAZEL_TIMEOUT_WATCH_PATH",
-                                               DEFAULT_TIMEOUT_WATCH_PATH),
-                image_tag=config.get("DAZEL_IMAGE_TAG",
-                                      DEFAULT_IMAGE_TAG),
-                cleanup_timescale=config.get("DAZEL_CLEANUP_TIMESCALE",
-                                              DEFAULT_CLEANUP_TIMESCALE),
-                build_arguments=config.get("DAZEL_BUILD_ARGS",
-                                            DEFAULT_BUILD_ARGS))
+                instance_name=config.get("DAZEL_INSTANCE_NAME"),
+                image_name=config.get("DAZEL_IMAGE_NAME"),
+                run_command=config.get("DAZEL_RUN_COMMAND"),
+                docker_command=config.get("DAZEL_DOCKER_COMMAND"),
+                dockerfile=config.get("DAZEL_DOCKERFILE"),
+                repository=config.get("DAZEL_REPOSITORY"),
+                directory=config.get("DAZEL_DIRECTORY"),
+                command=config.get("DAZEL_COMMAND"),
+                volumes=config.get("DAZEL_VOLUMES"),
+                ports=config.get("DAZEL_PORTS"),
+                network=config.get("DAZEL_NETWORK"),
+                run_deps=config.get("DAZEL_RUN_DEPS"),
+                docker_compose_file=config.get("DAZEL_DOCKER_COMPOSE_FILE"),
+                docker_compose_command=config.get("DAZEL_DOCKER_COMPOSE_COMMAND"),
+                docker_compose_project_name=config.get("DAZEL_DOCKER_COMPOSE_PROJECT_NAME"),
+                docker_compose_services=config.get("DAZEL_DOCKER_COMPOSE_SERVICES"),
+                bazel_rc_file=config.get("DAZEL_BAZEL_RC_FILE"),
+                bazel_user_output_root=config.get("DAZEL_BAZEL_USER_OUTPUT_ROOT"),
+                docker_run_privileged=config.get("DAZEL_DOCKER_RUN_PRIVILEGED"),
+                docker_machine=config.get("DAZEL_DOCKER_MACHINE"),
+                dazel_run_file=config.get("DAZEL_RUN_FILE"),
+                workspace_hex=config.get("DAZEL_WORKSPACE_HEX"),
+                image_hex_mix=config.get("DAZEL_IMAGE_HEX_MIX"),
+                exec_flags=config.get("DAZEL_EXEC_FLAGS"),
+                run_flags=config.get("DAZEL_RUN_FLAGS"),
+                files_watch=config.get("DAZEL_FILES_WATCH"),
+                interative_run=config.get("DAZEL_INTERACTIVE_RUN"),
+                timeout_watch_time=config.get("DAZEL_TIMEOUT_WATCH_TIME"),
+                timeout_watch_path=config.get("DAZEL_TIMEOUT_WATCH_PATH"),
+                image_tag=config.get("DAZEL_IMAGE_TAG"),
+                cleanup_timescale=config.get("DAZEL_CLEANUP_TIMESCALE"),
+                build_arguments=config.get("DAZEL_BUILD_ARGS"))
 
     def send_command(self, args):
         docker_command = "%s exec %s -i %s %s %s" % (
@@ -440,9 +459,12 @@ class DockerInstance:
         # DAZEL_VOLUMES can be a python iterable or a comma-separated string.
         if isinstance(volumes, str):
             volumes = [v.strip() for v in volumes.split(",")]
-        elif volumes and not isinstance(volumes, types.Iterable):
+        elif volumes and not isinstance(volumes, collections.Iterable):
             raise RuntimeError("DAZEL_VOLUMES must be comma-separated string "
                                "or python iterable of strings")
+
+        transform_paths = lambda v, f: ":".join(map(f, v.split(':')))
+        volumes = [transform_paths(v, os.path.expanduser) for v in volumes]
 
         # Find the real source and output directories.
         real_directory = os.path.realpath(self.directory)
@@ -512,7 +534,7 @@ class DockerInstance:
         # DAZEL_PORTS can be a python iterable or a comma-separated string.
         if isinstance(ports, str):
             ports = [p.strip() for p in ports.split(",")]
-        elif ports and not isinstance(ports, types.Iterable):
+        elif ports and not isinstance(ports, collections.Iterable):
             raise RuntimeError("DAZEL_PORTS must be comma-separated string "
                                "or python iterable of strings")
 
@@ -529,7 +551,7 @@ class DockerInstance:
         # DAZEL_RUN_DEPS can be a python iterable or a comma-separated string.
         if isinstance(run_deps, str):
             run_deps = [rd.strip() for rd in run_deps.split(",")]
-        elif run_deps and not isinstance(run_deps, types.Iterable):
+        elif run_deps and not isinstance(run_deps, collections.Iterable):
             raise RuntimeError("DAZEL_RUN_DEPS must be comma-separated string "
                                "or python iterable of strings")
 
@@ -550,7 +572,7 @@ class DockerInstance:
         # comma-separated string.
         if isinstance(docker_compose_services, str):
             docker_compose_services = [s.strip() for s in docker_compose_services.split(",")]
-        elif docker_compose_services and not isinstance(docker_compose_services, types.Iterable):
+        elif docker_compose_services and not isinstance(docker_compose_services, collections.Iterable):
             raise RuntimeError("DAZEL_DOCKER_COMPOSE_SERVICES must be comma-separated string "
                                "or python iterable of strings")
 
@@ -577,19 +599,29 @@ class DockerInstance:
         return "eval $(docker-machine env %s) && (%s)" % (self.docker_machine, cmd)
 
     @classmethod
-    def _config_from_file(cls):
-        """Creates a configuration from a .dazelrc file."""
+    def _config_from_user_file(cls, config):
+        """Applies configuration from user's ~/.dazelrc file to config."""
+        directory = os.environ.get("HOME", "~")
+        dazelrc_path = os.path.join(directory, DAZEL_RC_FILE)
+
+        if os.path.exists(dazelrc_path):
+            with open(dazelrc_path, "r") as dazelrc:
+                exec(dazelrc.read(), config)
+        config["DAZEL_FILES_WATCH"].append(dazelrc_path)
+        return config
+
+    @classmethod
+    def _config_from_workspace_file(cls, config):
+        """Applies configuration from workspace's .dazelrc file to config."""
         directory = cls._find_workspace_directory()
         local_dazelrc_path = os.path.join(directory, DAZEL_RC_FILE)
         dazelrc_path = os.environ.get("DAZEL_RC_FILE", local_dazelrc_path)
 
-        if not os.path.exists(dazelrc_path):
-            return { "DAZEL_DIRECTORY": os.environ.get("DAZEL_DIRECTORY", directory) }
-
-        config = {}
-        with open(dazelrc_path, "r") as dazelrc:
-            exec(dazelrc.read(), config)
+        if os.path.exists(dazelrc_path):
+            with open(dazelrc_path, "r") as dazelrc:
+                exec(dazelrc.read(), config)
         config["DAZEL_DIRECTORY"] = os.environ.get("DAZEL_DIRECTORY", directory)
+        config["DAZEL_FILES_WATCH"].append(dazelrc_path)
         return config
 
     @classmethod
