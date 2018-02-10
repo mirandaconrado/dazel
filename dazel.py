@@ -240,6 +240,8 @@ class DockerInstance:
         if self.timeout_watch_time is not None:
             bazel_command = ('touch %s && ' % self.timeout_watch_path) + bazel_command
 
+        bazel_command = 'cd "%s" && %s' % (os.getcwd(), bazel_command)
+
         command = '%s /bin/bash -c \'%s\'' % (docker_command, bazel_command)
 
         command = self._with_docker_machine(command)
