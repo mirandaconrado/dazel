@@ -218,6 +218,8 @@ class DockerInstance:
         is_interactive = len(args) > 0 and (args[0] == 'run') and self.interative_run
         if is_interactive:
             args = [args[0], "--script_path=/tmp/run_bazel"] + args[1:]
+        if os.environ.get("DAZEL_DEBUG", "0") == '1':
+            args = [args[0], "--announce_rc"] + args[1:]
 
         bazel_command = "%s %s %s %s" % (
             self.command,
@@ -243,6 +245,8 @@ class DockerInstance:
         bazel_command = 'cd "%s" && %s' % (os.getcwd(), bazel_command)
 
         command = '%s /bin/bash -c \'%s\'' % (docker_command, bazel_command)
+        if os.environ.get("DAZEL_DEBUG", "0") == '1':
+            print(command)
 
         command = self._with_docker_machine(command)
         return os.WEXITSTATUS(os.system(command))
@@ -440,6 +444,8 @@ class DockerInstance:
             self.image_tag,
             self.run_command if self.run_command else "")
         command = self._with_docker_machine(command)
+        if os.environ.get("DAZEL_DEBUG", "0") == '1':
+            print(command)
         rc = self._run_silent_command(command)
         if rc:
             return rc
