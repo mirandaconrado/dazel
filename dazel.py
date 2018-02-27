@@ -17,6 +17,7 @@ DEFAULT_IMAGE_NAME = "dazel"
 DEFAULT_RUN_COMMAND = "/bin/bash"
 DEFAULT_DOCKER_COMMAND = "docker"
 DEFAULT_LOCAL_DOCKERFILE = "Dockerfile.dazel"
+DEFAULT_DOCKER_BUILD_CONTEXT = os.getcwd()
 DEFAULT_REMOTE_REPOSITORY = "dazel"
 DEFAULT_DIRECTORY = os.getcwd()
 DEFAULT_COMMAND = "/usr/bin/bazel"
@@ -66,7 +67,7 @@ class DockerInstance:
     """
 
     def __init__(self, instance_name, image_name, run_command, docker_command, dockerfile,
-                       repository, directory, command, volumes, ports, network,
+                       docker_build_context, repository, directory, command, volumes, ports, network,
                        run_deps, docker_compose_file, docker_compose_command,
                        docker_compose_project_name, docker_compose_services, bazel_user_output_root,
                        bazel_rc_file, docker_run_privileged, docker_machine, dazel_run_file,
@@ -80,6 +81,7 @@ class DockerInstance:
         self.run_command = run_command
         self.docker_command = docker_command
         self.dockerfile = dockerfile
+        self.docker_build_context = docker_build_context
         self.repository = repository
         self.directory = directory
         self.command = command
@@ -139,6 +141,7 @@ class DockerInstance:
             "DAZEL_RUN_COMMAND": DEFAULT_RUN_COMMAND,
             "DAZEL_DOCKER_COMMAND": DEFAULT_DOCKER_COMMAND,
             "DAZEL_DOCKERFILE": DEFAULT_LOCAL_DOCKERFILE,
+            "DAZEL_DOCKER_BUILD_CONTEXT": DEFAULT_DOCKER_BUILD_CONTEXT,
             "DAZEL_REPOSITORY": DEFAULT_REMOTE_REPOSITORY,
             "DAZEL_DIRECTORY": cls._find_workspace_directory(),
             "DAZEL_COMMAND": DEFAULT_COMMAND,
@@ -178,6 +181,7 @@ class DockerInstance:
                 run_command=config.get("DAZEL_RUN_COMMAND"),
                 docker_command=config.get("DAZEL_DOCKER_COMMAND"),
                 dockerfile=config.get("DAZEL_DOCKERFILE"),
+                docker_build_context=config.get("DAZEL_DOCKER_BUILD_CONTEXT"),
                 repository=config.get("DAZEL_REPOSITORY"),
                 directory=config.get("DAZEL_DIRECTORY"),
                 command=config.get("DAZEL_COMMAND"),
@@ -348,7 +352,7 @@ class DockerInstance:
 
         command = "%s build %s -t %s/%s:%s -f %s %s" % (
             self.docker_command, build_arguments, self.repository, self.image_name, self.image_tag,
-            self.dockerfile, self.directory)
+            self.dockerfile, self.docker_build_context)
         command = self._with_docker_machine(command)
         return self._run_silent_command(command)
 
